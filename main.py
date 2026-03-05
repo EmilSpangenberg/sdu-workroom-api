@@ -10,12 +10,17 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 from datetime import datetime
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # ============================================
 # DATABASE SETUP - With Connection Pooling
 # ============================================
 
-DATABASE_URL = "postgresql://postgres:postgres123@localhost:5432/sdu_workrooms"
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres123@localhost:5432/sdu_workrooms")
 
 # Connection pool: Håndterer mange samtidige forbindelser
 engine = create_engine(
