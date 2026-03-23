@@ -21,7 +21,9 @@ load_dotenv()
 # DATABASE SETUP - With Connection Pooling
 # ============================================
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres123@localhost:5432/sdu_workrooms")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not set. Configure it in your .env file.")
 
 # Connection pool: Håndterer mange samtidige forbindelser
 engine = create_engine(
