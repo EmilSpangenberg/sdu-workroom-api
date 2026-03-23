@@ -14,7 +14,9 @@ CREATE TABLE workrooms (
     building_id INTEGER REFERENCES buildings(id),
     room_number VARCHAR(20) NOT NULL,
     capacity INTEGER NOT NULL,
-    is_available BOOLEAN DEFAULT true
+    is_available BOOLEAN DEFAULT true,
+    latitude DECIMAL(10, 8) NOT NULL,
+    longitude DECIMAL(11, 8) NOT NULL
 );
 
 -- Students
@@ -66,14 +68,14 @@ INSERT INTO buildings (name, code) VALUES
     ('Naturvidenskabeligt Fakultet', 'NAT'),
     ('Bibliotek', 'BIB');
 
-INSERT INTO workrooms (building_id, room_number, capacity) VALUES 
-    (1, 'Ø21-601a', 6),
-    (1, 'Ø21-601b', 6),
-    (1, 'Ø21-602', 4),
-    (2, 'N21-401', 4),
-    (2, 'N21-402', 8),
-    (3, 'BIB-G01', 4),
-    (3, 'BIB-101', 6);
+INSERT INTO workrooms (building_id, room_number, capacity, latitude, longitude) VALUES 
+    (1, 'Ø21-601a', 6, 55.35254, 10.42624),
+    (1, 'Ø21-601b', 6, 55.35254, 10.42624),
+    (1, 'Ø21-602', 4, 55.35254, 10.42624),
+    (2, 'N21-401', 4, 55.35282, 10.42801),
+    (2, 'N21-402', 8, 55.35282, 10.42801),
+    (3, 'BIB-G01', 4, 55.35156, 10.42715),
+    (3, 'BIB-101', 6, 55.35156, 10.42715);
 
 INSERT INTO room_conditions (room_id, is_occupied, noise_level, temperature) VALUES 
     (1, false, 35.0, 21.5),

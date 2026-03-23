@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+import math
 
 # Load environment variables from .env file
 load_dotenv()
@@ -69,6 +70,8 @@ class Workroom(Base):
     room_number = Column(String(20))
     capacity = Column(Integer)
     is_available = Column(Boolean, default=True)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
 
 
 class RoomCondition(Base):
@@ -120,6 +123,9 @@ class RoomResponse(BaseModel):
     is_occupied: bool
     noise_level: Optional[float]
     temperature: Optional[float]
+    latitude: float
+    longitude: float
+    distance_meters: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -132,6 +138,17 @@ class BookingCreate(BaseModel):
     end_time: datetime
 
 
+class BookingNearestCreate(BaseModel):
+    """Auto-book the nearest available room based on GPS coordinates"""
+    student_id: int
+    device_latitude: float
+    device_longitude: float
+    start_time: datetime
+    end_time: datetime
+    min_capacity: int = 1
+    max_distance_km: float = 10.0
+
+
 class BookingResponse(BaseModel):
     id: int
     room_id: int
@@ -139,6 +156,8 @@ class BookingResponse(BaseModel):
     start_time: datetime
     end_time: datetime
     status: str
+    latitude: float
+    longitude: float
 
     class Config:
         from_attributes = True
@@ -158,6 +177,32 @@ app = FastAPI(
     description="Find ledige grupperum på SDU campus",
     version="1.0.0"
 )
+
+
+# ============================================
+# UTILITY FUNCTIONS
+# ============================================
+
+def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Calculate the great-circle distance between two points on Earth.
+    Returns distance in meters.
+    
+    Args:
+        lat1, lon1: Device coordinates (degrees)
+        lat2, lon2: Room coordinates (degrees)
+    """
+    R = 6371000  # Earth radius in meters
+    
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    
+    a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    
+    return R * c
 
 
 # ============================================
@@ -190,7 +235,9 @@ def get_all_rooms(db: Session = Depends(get_db)):
             building_name=building.name if building else "Ukendt",
             is_occupied=condition.is_occupied if condition else False,
             noise_level=condition.noise_level if condition else None,
-            temperature=condition.temperature if condition else None
+            temperature=condition.temperature if condition else None,
+            latitude=room.latitude,
+            longitude=room.longitude
         ))
     
     return results
@@ -214,10 +261,75 @@ def get_available_rooms(min_capacity: int = 1, db: Session = Depends(get_db)):
                 building_name=building.name if building else "Ukendt",
                 is_occupied=False,
                 noise_level=condition.noise_level,
-                temperature=condition.temperature
+                temperature=condition.temperature,
+                latitude=room.latitude,
+                longitude=room.longitude
             ))
     
     return results
+
+
+@app.get("/rooms/nearest", response_model=List[RoomResponse])
+def get_nearest_available_rooms(
+    device_latitude: float,
+    device_longitude: float,
+    min_capacity: int = 1,
+    max_distance_km: float = 10.0,
+    db: Session = Depends(get_db)
+):
+    """
+    Find nearest available rooms based on device GPS coordinates.
+    
+    Query Parameters:
+    - device_latitude: Device's current latitude
+    - device_longitude: Device's current longitude
+    - min_capacity: Minimum room capacity required (default: 1)
+    - max_distance_km: Maximum search radius in kilometers (default: 10 km)
+    
+    Returns: Available rooms sorted by distance (nearest first)
+    """
+    results = []
+    rooms = db.query(Workroom).filter(Workroom.capacity >= min_capacity).all()
+    
+    max_distance_meters = max_distance_km * 1000
+    
+    for room in rooms:
+        building = db.query(Building).filter(Building.id == room.building_id).first()
+        condition = db.query(RoomCondition).filter(RoomCondition.room_id == room.id).first()
+        
+        # Only include available rooms
+        if condition and not condition.is_occupied:
+            # Calculate distance
+            distance = haversine_distance(
+                device_latitude,
+                device_longitude,
+                room.latitude,
+                room.longitude
+            )
+            
+            # Filter by max distance
+            if distance <= max_distance_meters:
+                results.append({
+                    "room": RoomResponse(
+                        id=room.id,
+                        room_number=room.room_number,
+                        capacity=room.capacity,
+                        building_code=building.code if building else "?",
+                        building_name=building.name if building else "Ukendt",
+                        is_occupied=False,
+                        noise_level=condition.noise_level,
+                        temperature=condition.temperature,
+                        latitude=room.latitude,
+                        longitude=room.longitude,
+                        distance_meters=distance
+                    ),
+                    "distance": distance
+                })
+    
+    # Sort by distance (nearest first)
+    results.sort(key=lambda x: x["distance"])
+    
+    return [r["room"] for r in results]
 
 
 # ============================================
@@ -234,6 +346,10 @@ def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
     
     # Start transaction
     try:
+        room = db.query(Workroom).filter(Workroom.id == booking.room_id).first()
+        if not room:
+            raise HTTPException(status_code=404, detail="Rum ikke fundet")
+
         # Tjek om rummet allerede er booket i tidsrummet
         # FOR UPDATE låser rækkerne så andre må vente
         existing_booking = db.query(Booking).filter(
@@ -269,7 +385,9 @@ def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
             student_id=new_booking.student_id,
             start_time=new_booking.start_time,
             end_time=new_booking.end_time,
-            status=new_booking.status
+            status=new_booking.status,
+            latitude=room.latitude,
+            longitude=room.longitude
         )
         
     except HTTPException:
@@ -279,7 +397,107 @@ def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/bookings")
+@app.post("/bookings/nearest-auto", response_model=BookingResponse)
+def create_booking_nearest(booking_nearest: BookingNearestCreate, db: Session = Depends(get_db)):
+    """
+    Auto-book the nearest available room based on device GPS coordinates.
+    Finds the closest available room and creates a booking in one request.
+    
+    Request Body:
+    - student_id: Student ID
+    - device_latitude: Device's current latitude
+    - device_longitude: Device's current longitude
+    - start_time: Booking start time
+    - end_time: Booking end time
+    - min_capacity: Minimum room capacity (default: 1)
+    - max_distance_km: Maximum search radius (default: 10 km)
+    
+    Returns: Created booking with the nearest available room
+    """
+    from sqlalchemy import and_
+    
+    try:
+        # Step 1: Find nearest available room
+        max_distance_meters = booking_nearest.max_distance_km * 1000
+        nearest_room = None
+        nearest_distance = float('inf')
+        
+        rooms = db.query(Workroom).filter(
+            Workroom.capacity >= booking_nearest.min_capacity
+        ).all()
+        
+        for room in rooms:
+            condition = db.query(RoomCondition).filter(
+                RoomCondition.room_id == room.id
+            ).first()
+            
+            # Only consider available rooms
+            if condition and not condition.is_occupied:
+                # Calculate distance
+                distance = haversine_distance(
+                    booking_nearest.device_latitude,
+                    booking_nearest.device_longitude,
+                    room.latitude,
+                    room.longitude
+                )
+                
+                # Check if within max distance and closer than previous
+                if distance <= max_distance_meters and distance < nearest_distance:
+                    nearest_distance = distance
+                    nearest_room = room
+        
+        if not nearest_room:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No available rooms found within {booking_nearest.max_distance_km} km with capacity {booking_nearest.min_capacity}+"
+            )
+        
+        # Step 2: Book the nearest room (with concurrency control)
+        # Check for conflicting bookings
+        existing_booking = db.query(Booking).filter(
+            and_(
+                Booking.room_id == nearest_room.id,
+                Booking.status == "confirmed",
+                Booking.start_time < booking_nearest.end_time,
+                Booking.end_time > booking_nearest.start_time
+            )
+        ).with_for_update().first()
+        
+        if existing_booking:
+            raise HTTPException(
+                status_code=409,
+                detail="Nearest room was just booked by another user. Try again to find next nearest room."
+            )
+        
+        # Create booking
+        new_booking = Booking(
+            room_id=nearest_room.id,
+            student_id=booking_nearest.student_id,
+            start_time=booking_nearest.start_time,
+            end_time=booking_nearest.end_time,
+            status="confirmed"
+        )
+        db.add(new_booking)
+        db.commit()
+        db.refresh(new_booking)
+        
+        return BookingResponse(
+            id=new_booking.id,
+            room_id=new_booking.room_id,
+            student_id=new_booking.student_id,
+            start_time=new_booking.start_time,
+            end_time=new_booking.end_time,
+            status=new_booking.status,
+            latitude=nearest_room.latitude,
+            longitude=nearest_room.longitude
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
 def get_bookings(room_id: Optional[int] = None, db: Session = Depends(get_db)):
     query = db.query(Booking)
     if room_id:
