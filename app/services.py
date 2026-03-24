@@ -162,6 +162,25 @@ class BookingService:
             .with_for_update()
             .first()
         )
+        
+    def _set_room_occupied(self, room_id: int, occupied: bool) -> None:
+        condition = (
+            self.db.query(RoomCondition)
+            .filter(RoomCondition.room_id == room_id)
+            .first()
+        )
+        if condition:
+            condition.is_occupied = occupied
+            condition.updated_at = datetime.utcnow()
+        else:
+            # in case room has no row yet
+            self.db.add(
+                RoomCondition(
+                    room_id=room_id,
+                    is_occupied=occupied,
+                    updated_at=datetime.utcnow(),
+                )
+            )   
 
     def create_booking(self, booking: BookingCreate) -> BookingResponse:
         try:
@@ -188,6 +207,7 @@ class BookingService:
                 status="confirmed",
             )
             self.db.add(new_booking)
+            self._set_room_occupied(new_booking.room_id, True)
             self.db.commit()
             self.db.refresh(new_booking)
 
@@ -244,6 +264,7 @@ class BookingService:
                 status="confirmed",
             )
             self.db.add(new_booking)
+            self._set_room_occupied(new_booking.room_id, True)
             self.db.commit()
             self.db.refresh(new_booking)
 
