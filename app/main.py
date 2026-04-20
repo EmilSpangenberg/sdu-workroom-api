@@ -10,14 +10,14 @@ from app.routers import (
 
 app = FastAPI(
     title="SDU Workroom Finder API",
-    description="Find ledige grupperum på SDU campus",
+    description="Find available study rooms on SDU campus",
     version="1.0.0"
 )
 
 
 @app.get("/")
 def home():
-    return {"status": "online", "message": "SDU Workroom Finder API kører!"}
+    return {"status": "online", "message": "SDU Workroom Finder API is running!"}
 
 
 app.include_router(rooms_router)

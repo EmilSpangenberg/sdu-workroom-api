@@ -7,7 +7,7 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.models import Booking, Building, Gadget, RoomCondition, Student, Workroom
-from app.schemas import BookingCreate, BookingNearestCreate, BookingResponse, RoomResponse, StudentCreate
+from app.schemas import BookingNearestCreate, BookingResponse, RoomResponse, StudentCreate
 from app.utils import haversine_distance
 
 
@@ -37,13 +37,26 @@ class RoomService:
             room_number=room.room_number,
             capacity=room.capacity,
             building_code=building.code if building else "?",
-            building_name=building.name if building else "Ukendt",
+            building_name=building.name if building else "Unknown",
             is_occupied=is_occupied,
             noise_level=noise_level,
             temperature=temperature,
             latitude=room.latitude,
             longitude=room.longitude,
             distance_meters=distance_meters,
+        )
+
+    def _has_active_booking(self, room_id: int, at_time: datetime) -> bool:
+        return (
+            self.db.query(Booking.id)
+            .filter(
+                Booking.room_id == room_id,
+                Booking.status != "cancelled",
+                Booking.start_time < at_time,
+                Booking.end_time > at_time,
+            )
+            .first()
+            is not None
         )
 
     def _room_base_query(self, min_capacity: Optional[int] = None):
@@ -61,14 +74,12 @@ class RoomService:
         return [self._to_room_response(room, building, condition) for room, building, condition in rows]
 
     def get_available_rooms(self, min_capacity: int = 1) -> List[RoomResponse]:
-        rows = (
-            self._room_base_query(min_capacity)
-            .filter(RoomCondition.id.is_not(None), RoomCondition.is_occupied.is_(False))
-            .all()
-        )
+        now = datetime.utcnow()
+        rows = self._room_base_query(min_capacity).all()
         return [
             self._to_room_response(room, building, condition, force_available=True)
             for room, building, condition in rows
+            if not self._has_active_booking(room.id, now)
         ]
 
     def get_nearest_available_rooms(
@@ -78,15 +89,15 @@ class RoomService:
         min_capacity: int = 1,
         max_distance_km: float = 10.0,
     ) -> List[RoomResponse]:
-        rows = (
-            self._room_base_query(min_capacity)
-            .filter(RoomCondition.id.is_not(None), RoomCondition.is_occupied.is_(False))
-            .all()
-        )
+        now = datetime.utcnow()
+        rows = self._room_base_query(min_capacity).all()
         max_distance_meters = max_distance_km * 1000
         results: List[Tuple[float, RoomResponse]] = []
 
         for room, building, condition in rows:
+            if self._has_active_booking(room.id, now):
+                continue
+
             distance = haversine_distance(
                 gadget_latitude,
                 gadget_longitude,
@@ -117,16 +128,16 @@ class RoomService:
         min_capacity: int = 1,
         max_distance_km: float = 10.0,
     ) -> Optional[Tuple[Workroom, float]]:
-        rows = (
-            self._room_base_query(min_capacity)
-            .filter(RoomCondition.id.is_not(None), RoomCondition.is_occupied.is_(False))
-            .all()
-        )
+        now = datetime.utcnow()
+        rows = self._room_base_query(min_capacity).all()
         max_distance_meters = max_distance_km * 1000
         nearest_room: Optional[Workroom] = None
         nearest_distance = float("inf")
 
         for room, _, _ in rows:
+            if self._has_active_booking(room.id, now):
+                continue
+
             distance = haversine_distance(
                 gadget_latitude,
                 gadget_longitude,
@@ -146,9 +157,6 @@ class BookingService:
     def __init__(self, db: Session):
         self.db = db
 
-    def _find_room(self, room_id: int) -> Optional[Workroom]:
-        return self.db.query(Workroom).filter(Workroom.id == room_id).first()
-
     def _find_conflicting_booking(self, room_id: int, start_time: datetime, end_time: datetime):
         return (
             self.db.query(Booking)
@@ -167,62 +175,14 @@ class BookingService:
     def _find_gadget(self, gadget_id: int) -> Optional[Gadget]:
         return self.db.query(Gadget).filter(Gadget.id == gadget_id).first()
 
-    def create_booking(self, booking: BookingCreate) -> BookingResponse:
-        try:
-            room = self._find_room(booking.room_id)
-            if not room:
-                raise HTTPException(status_code=404, detail="Rum ikke fundet")
-
-            gadget = self._find_gadget(booking.gadget_id)
-            if not gadget:
-                raise HTTPException(status_code=404, detail="Gadget ikke fundet")
-
-            existing_booking = self._find_conflicting_booking(
-                booking.room_id,
-                booking.start_time,
-                booking.end_time,
-            )
-            if existing_booking:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Rummet er allerede booket i dette tidsrum",
-                )
-
-            new_booking = Booking(
-                room_id=booking.room_id,
-                gadget_id=booking.gadget_id,
-                start_time=booking.start_time,
-                end_time=booking.end_time,
-                status="confirmed",
-            )
-            self.db.add(new_booking)
-            self.db.commit()
-            self.db.refresh(new_booking)
-
-            return BookingResponse(
-                id=new_booking.id,
-                room_id=new_booking.room_id,
-                gadget_id=new_booking.gadget_id,
-                start_time=new_booking.start_time,
-                end_time=new_booking.end_time,
-                status=new_booking.status,
-                latitude=room.latitude,
-                longitude=room.longitude,
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            self.db.rollback()
-            raise HTTPException(status_code=500, detail=str(e))
-
     def create_nearest_booking(self, booking_nearest: BookingNearestCreate) -> BookingResponse:
         try:
             if booking_nearest.booking_time <= 0:
-                raise HTTPException(status_code=400, detail="booking_time skal vaere stoerre end 0")
+                raise HTTPException(status_code=400, detail="booking_time must be greater than 0")
 
             gadget = self._find_gadget(booking_nearest.gadget_id)
             if not gadget:
-                raise HTTPException(status_code=404, detail="Gadget ikke fundet")
+                raise HTTPException(status_code=404, detail="Gadget not found")
 
             start_time = datetime.utcnow()
             end_time = start_time + timedelta(minutes=booking_nearest.booking_time)
@@ -320,11 +280,11 @@ class BookingService:
     def cancel_booking(self, booking_id: int):
         booking = self.db.query(Booking).filter(Booking.id == booking_id).first()
         if not booking:
-            raise HTTPException(status_code=404, detail="Booking ikke fundet")
+            raise HTTPException(status_code=404, detail="Booking not found")
 
         booking.status = "cancelled"
         self.db.commit()
-        return {"message": "Booking annulleret"}
+        return {"message": "Booking cancelled"}
 
 
 class SensorService:
@@ -340,7 +300,7 @@ class SensorService:
     ):
         condition = self.db.query(RoomCondition).filter(RoomCondition.room_id == room_id).first()
         if not condition:
-            raise HTTPException(status_code=404, detail="Rum ikke fundet")
+            raise HTTPException(status_code=404, detail="Room not found")
 
         if noise_level is not None:
             condition.noise_level = noise_level
@@ -351,7 +311,7 @@ class SensorService:
 
         condition.updated_at = datetime.utcnow()
         self.db.commit()
-        return {"message": "Sensor-data opdateret", "room_id": room_id}
+        return {"message": "Sensor data updated", "room_id": room_id}
 
 
 class StudentService:
@@ -372,7 +332,7 @@ class StudentService:
             self.db.refresh(new_gadget)
 
             return {
-                "message": "Studerende og gadget oprettet",
+                "message": "Student and gadget created",
                 "id": new_student.id,
                 "gadget_id": new_gadget.id,
                 "gadget_code": new_gadget.device_code,

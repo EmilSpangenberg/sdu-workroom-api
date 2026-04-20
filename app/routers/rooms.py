@@ -13,8 +13,8 @@ router = APIRouter()
 @router.get("/rooms", response_model=List[RoomResponse])
 def get_all_rooms(db: Session = Depends(get_db)):
     """
-    Hent alle rum.
-    db: Session = Depends(get_db) giver automatisk en database session.
+    Fetch all rooms.
+    db: Session = Depends(get_db) automatically provides a database session.
     """
     return RoomService(db).get_all_rooms()
 

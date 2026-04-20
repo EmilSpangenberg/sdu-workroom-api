@@ -21,13 +21,6 @@ class RoomResponse(BaseModel):
         from_attributes = True
 
 
-class BookingCreate(BaseModel):
-    room_id: int
-    gadget_id: int
-    start_time: datetime
-    end_time: datetime
-
-
 class BookingNearestCreate(BaseModel):
     """Auto-book the nearest available room based on gadget GPS coordinates"""
     gadget_id: int

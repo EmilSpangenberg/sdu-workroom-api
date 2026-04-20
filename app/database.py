@@ -3,13 +3,13 @@ from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from app.config import DATABASE_URL
 
-# Connection pool: Håndterer mange samtidige forbindelser
+# Connection pool: Handles many concurrent connections
 engine = create_engine(
     DATABASE_URL,
-    pool_size=10,          # 10 forbindelser klar til brug
-    max_overflow=20,       # Op til 20 ekstra ved spidsbelastning
-    pool_pre_ping=True,    # Tjek om forbindelse virker før brug
-    pool_recycle=3600,     # Genopret forbindelser hver time
+    pool_size=10,          # 10 ready-to-use connections
+    max_overflow=20,       # Up to 20 extra at peak load
+    pool_pre_ping=True,    # Check connection health before use
+    pool_recycle=3600,     # Recreate connections every hour
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -18,8 +18,8 @@ Base = declarative_base()
 
 def get_db():
     """
-    Opretter en database session per request.
-    Lukker automatisk når request er færdig.
+    Creates one database session per request.
+    Closes the session automatically when the request is complete.
     """
     db: Session = SessionLocal()
     try:
