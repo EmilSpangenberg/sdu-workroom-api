@@ -23,26 +23,24 @@ class RoomResponse(BaseModel):
 
 class BookingCreate(BaseModel):
     room_id: int
-    student_id: int
+    gadget_id: int
     start_time: datetime
     end_time: datetime
 
 
 class BookingNearestCreate(BaseModel):
-    """Auto-book the nearest available room based on GPS coordinates"""
-    student_id: int
-    device_latitude: float
-    device_longitude: float
-    start_time: datetime
-    end_time: datetime
+    """Auto-book the nearest available room based on gadget GPS coordinates"""
+    gadget_id: int
+    gadget_latitude: float
+    gadget_longitude: float
+    booking_time: int  # in minutes
     min_capacity: int = 1
-    max_distance_km: float = 10.0
 
 
 class BookingResponse(BaseModel):
     id: int
     room_id: int
-    student_id: int
+    gadget_id: int
     start_time: datetime
     end_time: datetime
     status: str

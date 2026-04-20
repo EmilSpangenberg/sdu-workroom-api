@@ -1,11 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+from uuid import uuid4
 from typing import List, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
-from app.models import Booking, Building, RoomCondition, Student, Workroom
+from app.models import Booking, Building, Gadget, RoomCondition, Student, Workroom
 from app.schemas import BookingCreate, BookingNearestCreate, BookingResponse, RoomResponse, StudentCreate
 from app.utils import haversine_distance
 
@@ -72,8 +73,8 @@ class RoomService:
 
     def get_nearest_available_rooms(
         self,
-        device_latitude: float,
-        device_longitude: float,
+        gadget_latitude: float,
+        gadget_longitude: float,
         min_capacity: int = 1,
         max_distance_km: float = 10.0,
     ) -> List[RoomResponse]:
@@ -87,8 +88,8 @@ class RoomService:
 
         for room, building, condition in rows:
             distance = haversine_distance(
-                device_latitude,
-                device_longitude,
+                gadget_latitude,
+                gadget_longitude,
                 room.latitude,
                 room.longitude,
             )
@@ -111,8 +112,8 @@ class RoomService:
 
     def find_nearest_available_room(
         self,
-        device_latitude: float,
-        device_longitude: float,
+        gadget_latitude: float,
+        gadget_longitude: float,
         min_capacity: int = 1,
         max_distance_km: float = 10.0,
     ) -> Optional[Tuple[Workroom, float]]:
@@ -127,8 +128,8 @@ class RoomService:
 
         for room, _, _ in rows:
             distance = haversine_distance(
-                device_latitude,
-                device_longitude,
+                gadget_latitude,
+                gadget_longitude,
                 room.latitude,
                 room.longitude,
             )
@@ -154,7 +155,7 @@ class BookingService:
             .filter(
                 and_(
                     Booking.room_id == room_id,
-                    Booking.status == "confirmed",
+                    Booking.status != "cancelled",
                     Booking.start_time < end_time,
                     Booking.end_time > start_time,
                 )
@@ -162,31 +163,19 @@ class BookingService:
             .with_for_update()
             .first()
         )
-        
-    def _set_room_occupied(self, room_id: int, occupied: bool) -> None:
-        condition = (
-            self.db.query(RoomCondition)
-            .filter(RoomCondition.room_id == room_id)
-            .first()
-        )
-        if condition:
-            condition.is_occupied = occupied
-            condition.updated_at = datetime.utcnow()
-        else:
-            # in case room has no row yet
-            self.db.add(
-                RoomCondition(
-                    room_id=room_id,
-                    is_occupied=occupied,
-                    updated_at=datetime.utcnow(),
-                )
-            )   
+
+    def _find_gadget(self, gadget_id: int) -> Optional[Gadget]:
+        return self.db.query(Gadget).filter(Gadget.id == gadget_id).first()
 
     def create_booking(self, booking: BookingCreate) -> BookingResponse:
         try:
             room = self._find_room(booking.room_id)
             if not room:
                 raise HTTPException(status_code=404, detail="Rum ikke fundet")
+
+            gadget = self._find_gadget(booking.gadget_id)
+            if not gadget:
+                raise HTTPException(status_code=404, detail="Gadget ikke fundet")
 
             existing_booking = self._find_conflicting_booking(
                 booking.room_id,
@@ -201,20 +190,19 @@ class BookingService:
 
             new_booking = Booking(
                 room_id=booking.room_id,
-                student_id=booking.student_id,
+                gadget_id=booking.gadget_id,
                 start_time=booking.start_time,
                 end_time=booking.end_time,
                 status="confirmed",
             )
             self.db.add(new_booking)
-            self._set_room_occupied(new_booking.room_id, True)
             self.db.commit()
             self.db.refresh(new_booking)
 
             return BookingResponse(
                 id=new_booking.id,
                 room_id=new_booking.room_id,
-                student_id=new_booking.student_id,
+                gadget_id=new_booking.gadget_id,
                 start_time=new_booking.start_time,
                 end_time=new_booking.end_time,
                 status=new_booking.status,
@@ -229,26 +217,52 @@ class BookingService:
 
     def create_nearest_booking(self, booking_nearest: BookingNearestCreate) -> BookingResponse:
         try:
-            nearest = RoomService(self.db).find_nearest_available_room(
-                device_latitude=booking_nearest.device_latitude,
-                device_longitude=booking_nearest.device_longitude,
-                min_capacity=booking_nearest.min_capacity,
-                max_distance_km=booking_nearest.max_distance_km,
+            if booking_nearest.booking_time <= 0:
+                raise HTTPException(status_code=400, detail="booking_time skal vaere stoerre end 0")
+
+            gadget = self._find_gadget(booking_nearest.gadget_id)
+            if not gadget:
+                raise HTTPException(status_code=404, detail="Gadget ikke fundet")
+
+            start_time = datetime.utcnow()
+            end_time = start_time + timedelta(minutes=booking_nearest.booking_time)
+
+            room_candidates = (
+                self.db.query(Workroom)
+                .filter(Workroom.capacity >= booking_nearest.min_capacity)
+                .all()
             )
-            if not nearest:
+
+            nearest_room: Optional[Workroom] = None
+            nearest_distance = float("inf")
+
+            for room in room_candidates:
+                # Availability is based only on active bookings, not room_conditions.is_occupied.
+                if self._find_conflicting_booking(room.id, start_time, end_time):
+                    continue
+
+                distance = haversine_distance(
+                    booking_nearest.gadget_latitude,
+                    booking_nearest.gadget_longitude,
+                    room.latitude,
+                    room.longitude,
+                )
+                if distance < nearest_distance:
+                    nearest_room = room
+                    nearest_distance = distance
+
+            if not nearest_room:
                 raise HTTPException(
                     status_code=404,
                     detail=(
-                        f"No available rooms found within {booking_nearest.max_distance_km} km "
-                        f"with capacity {booking_nearest.min_capacity}+"
+                        f"No available rooms found with capacity {booking_nearest.min_capacity}+"
                     ),
                 )
 
-            nearest_room, _ = nearest
             existing_booking = self._find_conflicting_booking(
                 nearest_room.id,
-                booking_nearest.start_time,
-                booking_nearest.end_time,
+                start_time,
+                end_time,
             )
             if existing_booking:
                 raise HTTPException(
@@ -258,20 +272,19 @@ class BookingService:
 
             new_booking = Booking(
                 room_id=nearest_room.id,
-                student_id=booking_nearest.student_id,
-                start_time=booking_nearest.start_time,
-                end_time=booking_nearest.end_time,
+                gadget_id=booking_nearest.gadget_id,
+                start_time=start_time,
+                end_time=end_time,
                 status="confirmed",
             )
             self.db.add(new_booking)
-            self._set_room_occupied(new_booking.room_id, True)
             self.db.commit()
             self.db.refresh(new_booking)
 
             return BookingResponse(
                 id=new_booking.id,
                 room_id=new_booking.room_id,
-                student_id=new_booking.student_id,
+                gadget_id=new_booking.gadget_id,
                 start_time=new_booking.start_time,
                 end_time=new_booking.end_time,
                 status=new_booking.status,
@@ -294,7 +307,7 @@ class BookingService:
             BookingResponse(
                 id=booking.id,
                 room_id=booking.room_id,
-                student_id=booking.student_id,
+                gadget_id=booking.gadget_id,
                 start_time=booking.start_time,
                 end_time=booking.end_time,
                 status=booking.status,
@@ -346,10 +359,27 @@ class StudentService:
         self.db = db
 
     def create_student(self, student: StudentCreate):
-        new_student = Student(sdu_id=student.sdu_id, name=student.name)
-        self.db.add(new_student)
-        self.db.commit()
-        return {"message": "Studerende oprettet", "id": new_student.id}
+        try:
+            new_student = Student(sdu_id=student.sdu_id, name=student.name)
+            self.db.add(new_student)
+            self.db.flush()
+
+            gadget_code = f"gadget-{uuid4().hex[:12]}"
+            new_gadget = Gadget(device_code=gadget_code, student_id=new_student.id)
+            self.db.add(new_gadget)
+            self.db.commit()
+            self.db.refresh(new_student)
+            self.db.refresh(new_gadget)
+
+            return {
+                "message": "Studerende og gadget oprettet",
+                "id": new_student.id,
+                "gadget_id": new_gadget.id,
+                "gadget_code": new_gadget.device_code,
+            }
+        except Exception as e:
+            self.db.rollback()
+            raise HTTPException(status_code=500, detail=str(e))
 
     def get_students(self):
         students = self.db.query(Student).all()

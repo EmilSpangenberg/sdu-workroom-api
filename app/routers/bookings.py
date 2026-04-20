@@ -4,35 +4,24 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas import BookingCreate, BookingNearestCreate, BookingResponse
+from app.schemas import BookingNearestCreate, BookingResponse
 from app.services import BookingService
 
 router = APIRouter()
 
 
-@router.post("/bookings", response_model=BookingResponse)
-def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
-    """
-    Opret booking med concurrent access kontrol.
-    Bruger SELECT ... FOR UPDATE til at låse rækken.
-    """
-    return BookingService(db).create_booking(booking)
-
-
 @router.post("/bookings/nearest-auto", response_model=BookingResponse)
 def create_booking_nearest(booking_nearest: BookingNearestCreate, db: Session = Depends(get_db)):
     """
-    Auto-book the nearest available room based on device GPS coordinates.
+    Auto-book the nearest available room based on gadget GPS coordinates.
     Finds the closest available room and creates a booking in one request.
 
     Request Body:
-    - student_id: Student ID
-    - device_latitude: Device's current latitude
-    - device_longitude: Device's current longitude
-    - start_time: Booking start time
-    - end_time: Booking end time
+    - gadget_id: Gadget ID
+    - gadget_latitude: Gadget's current latitude
+    - gadget_longitude: Gadget's current longitude
+    - booking_time: Booking duration in minutes
     - min_capacity: Minimum room capacity (default: 1)
-    - max_distance_km: Maximum search radius (default: 10 km)
 
     Returns: Created booking with the nearest available room
     """

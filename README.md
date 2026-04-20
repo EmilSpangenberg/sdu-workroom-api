@@ -97,13 +97,11 @@ Use local LAN first (same Wi-Fi as your API host), then harden security later.
 
 ```json
 {
-  "student_id": 1,
-  "device_latitude": 55.35254,
-  "device_longitude": 10.42624,
-  "start_time": "2026-03-23T10:00:00",
-  "end_time": "2026-03-23T11:00:00",
-  "min_capacity": 1,
-  "max_distance_km": 10.0
+  "gadget_id": 2,
+  "gadget_latitude": 55.35282,
+  "gadget_longitude": 10.42801,
+  "booking_time": 60,
+  "min_capacity": 5
 }
 ```
 
@@ -122,25 +120,3 @@ Use local LAN first (same Wi-Fi as your API host), then harden security later.
 
 1. `DATABASE_URL` must be set correctly, or the app will fail at startup.
 2. If dependency installation fails on Python 3.13 with old pinned versions, update packages to Python 3.13-compatible releases.
-
-
-{
-  "student_id": 1,
-  "device_latitude": 55.35282,
-  "device_longitude": 10.42801,
-  "start_time": "2026-03-24T08:41:17.594Z",
-  "end_time": "2026-03-24T08:41:17.594Z",
-  "min_capacity": 5,
-  "max_distance_km": 10
-}
-
-
-device sends
-{
-  "device_id": 1,
-  "device_latitude": 55.35282,
-  "device_longitude": 10.42801,
-  "booking_time": int (minutes),
-  "min_capacity": 5,
-}
-

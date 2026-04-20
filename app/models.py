@@ -52,7 +52,7 @@ class Booking(Base):
     __tablename__ = "bookings"
     id = Column(Integer, primary_key=True)
     room_id = Column(Integer, ForeignKey("workrooms.id"))
-    student_id = Column(Integer, ForeignKey("students.id"))
+    gadget_id = Column(Integer, ForeignKey("gadgets.id"))
     start_time = Column(DateTime, nullable=False)
     end_time = Column(DateTime, nullable=False)
     status = Column(String(20), default="confirmed")

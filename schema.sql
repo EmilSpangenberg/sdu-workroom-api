@@ -54,7 +54,7 @@ CREATE TABLE search_requests (
 
 CREATE TABLE bookings (
     id SERIAL PRIMARY KEY,
-    student_id INTEGER REFERENCES students(id),
+    gadget_id INTEGER REFERENCES gadgets(id),
     room_id INTEGER REFERENCES workrooms(id),
     start_time TIMESTAMP NOT NULL,
     end_time TIMESTAMP NOT NULL,
